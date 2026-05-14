@@ -1,14 +1,13 @@
 import os
-
-# Bellek parçalanmasını engelleyen koruma kalkanı
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:32"
+# İŞTE KİLİTLENMEYİ (DEADLOCK) ÖNLEYEN HAYATİ AYARLAR BURADA
+# PyTorch'un bütün işlemciye saldırıp sistemi dondurmasını engelliyoruz
+os.environ['OMP_NUM_THREADS'] = '1'
+os.environ['OPENBLAS_NUM_THREADS'] = '1'
+os.environ['MKL_NUM_THREADS'] = '1'
 
 import torch
-
-# İŞTE EKSİK OLAN VE HATAYI ÇÖZECEK KRİTİK SATIR BURADA!
-# PyTorch'un sorunlu cuDNN motorunu tamamen kapatıp standart CUDA çekirdeklerini kullanmaya zorluyoruz.
-torch.backends.cudnn.enabled = False
-torch.backends.cudnn.benchmark = False
+# PyTorch'a KESİN OLARAK sadece 1 CPU çekirdeği kullanmasını emrediyoruz
+torch.set_num_threads(1)
 
 import cv2
 from ultralytics import YOLO
@@ -35,31 +34,22 @@ FPS_TARGET = 30
 YAYIN_YAP = True
 SUNUCU_IP = "192.168.1.34"
 SUNUCU_PORT = 5000
-STREAM_WIDTH = 640
+STREAM_WIDTH = 640          
 STREAM_HEIGHT = 360
-JPEG_KALITE = 45
+JPEG_KALITE = 45            
 
 YOLO_MODEL_YOLU = 'weights (1).engine'
 
-# GPU TRAFİK POLİSİ (Çarpışmaları Önler)
-gpu_lock = threading.Lock()
-
 # ─────────────────────────────────────────────
-# KUSURSUZ DOĞRULAMA ALGORİTMASI
+# KUSURSUZ DOĞRULAMA ALGORİTMASI 
 # ─────────────────────────────────────────────
-DIGIT_OPTS = {'O': ['0'], 'Q': ['0'], 'U': ['0'], 'D': ['0'], 'I': ['1', '7'], 'L': ['1'], 'J': ['1', '7'],
-              'Z': ['7', '2'],
-              'E': ['3'], 'S': ['5'], 'G': ['6'], 'T': ['7'], 'F': ['7'], 'Y': ['7', '0'], 'B': ['8'], 'P': ['9'],
-              'N': ['7']}
+DIGIT_OPTS = {'O': ['0'], 'Q': ['0'], 'U': ['0'], 'D': ['0'], 'I': ['1','7'], 'L': ['1'], 'J': ['1', '7'], 'Z': ['7', '2'],
+              'E': ['3'], 'S': ['5'], 'G': ['6'], 'T': ['7'], 'F': ['7'], 'Y': ['7', '0'], 'B': ['8'], 'P': ['9'], 'N': ['7']}
 HARF_OPTS = {'0': ['O'], '1': ['I'], '2': ['Z'], '5': ['S'], '6': ['G'], '8': ['B'], '4': ['A'], '7': ['T', 'J']}
 PLAKA_RE = re.compile(r'^\d{2}[A-Z]{1,3}\d{2,4}$')
 
-
 def char_d(c): return DIGIT_OPTS.get(c, [c]) if not c.isdigit() else [c]
-
-
 def char_h(c): return HARF_OPTS.get(c, [c]) if not c.isalpha() else [c]
-
 
 def deduplicate(text):
     n = len(text)
@@ -70,7 +60,6 @@ def deduplicate(text):
         if suffix and prefix.startswith(suffix[:min(3, len(suffix))]): return prefix
     return text
 
-
 def score_aday(orijinal, aday, hbitis):
     hlen = hbitis - 2
     son_uzunluk = len(aday) - hbitis
@@ -80,19 +69,19 @@ def score_aday(orijinal, aday, hbitis):
             if o != a: donusum += 1
     return (hlen, son_uzunluk, -donusum)
 
-
 def duzelt_ve_dogrula(text):
     text_clean = deduplicate(''.join(text.upper().split()))
     text_clean = re.sub(r'[^A-Z0-9]', '', text_clean)
-
+    
+    # Mavi TR Bandı Çöpünü Temizle
     match = re.search(r'\d', text_clean)
     if match:
         ilk_rakam_index = match.start()
-        if ilk_rakam_index <= 2:
+        if ilk_rakam_index <= 2: 
             text_clean = text_clean[ilk_rakam_index:]
 
     if not 5 <= len(text_clean) <= 10: return None
-
+    
     adaylar = []
     for hlen in [3, 2, 1]:
         hbitis = 2 + hlen
@@ -114,47 +103,44 @@ def duzelt_ve_dogrula(text):
     adaylar.sort(key=lambda x: x[0], reverse=True)
     return adaylar[0][1]
 
-
 # ─────────────────────────────────────────────
-# 1. OCR İŞÇİSİ (TRAFİK POLİSİ İLE)
+# 1. OCR İŞÇİSİ (1 ÇEKİRDEKLİ CPU - ASLA KİLİTLENMEZ)
 # ─────────────────────────────────────────────
 ocr_kuyrugu = queue.Queue(maxsize=3)
 plaka_hafizasi = {}
 
-
 def ocr_iscisi(reader):
-    print("\n[BİLGİ] OCR İşçisi Hazır! (GPU Aktif & Trafik Polisi Devrede)")
+    print("\n[BİLGİ] OCR İşçisi Hazır! (CPU Modu & 1 Çekirdek Kilidi Aktif)")
     while True:
         gorev = ocr_kuyrugu.get()
-        if gorev is None: break
-
+        if gorev is None: break  
+        
         track_id, plaka_crop = gorev
         try:
+            # Akıllı Boyutlandırma (Genişliği 400px'e sabitler)
             h, w = plaka_crop.shape[:2]
             if w > 0:
                 hedef_genislik = 400
                 oran = hedef_genislik / float(w)
                 hedef_yukseklik = int(h * oran)
                 if oran > 1:
-                    plaka_crop = cv2.resize(plaka_crop, (hedef_genislik, hedef_yukseklik),
-                                            interpolation=cv2.INTER_CUBIC)
+                    plaka_crop = cv2.resize(plaka_crop, (hedef_genislik, hedef_yukseklik), interpolation=cv2.INTER_CUBIC)
                 else:
                     plaka_crop = cv2.resize(plaka_crop, (hedef_genislik, hedef_yukseklik), interpolation=cv2.INTER_AREA)
 
             gray = cv2.cvtColor(plaka_crop, cv2.COLOR_BGR2GRAY)
-
-            # GPU BOŞALANA KADAR BEKLE VE KULLAN
-            with gpu_lock:
-                ocr_res = reader.readtext(gray, allowlist='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ', width_ths=1.0)
-
+            
+            # OCR İşlemi (Artık sonsuza kadar donmayacak)
+            ocr_res = reader.readtext(gray, allowlist='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ', width_ths=1.0)
+            
             ham_metin = "".join([res[1] for res in ocr_res])
-
+            
             if len(ham_metin) > 3:
                 print(f"🔍 [OCR OKUDU] -> {ham_metin}")
 
             ham_dd = deduplicate(ham_metin)
             duzeltilmis = duzelt_ve_dogrula(ham_dd)
-
+            
             if duzeltilmis:
                 plaka_hafizasi[track_id] = duzeltilmis
                 print(f"✅ [HEDEF KİLİTLENDİ] ID: {track_id} | Plaka: {duzeltilmis}")
@@ -164,12 +150,10 @@ def ocr_iscisi(reader):
         finally:
             ocr_kuyrugu.task_done()
 
-
 # ─────────────────────────────────────────────
 # 2. THREAD YAYIN İŞÇİSİ
 # ─────────────────────────────────────────────
 stream_kuyrugu = queue.Queue(maxsize=2)
-
 
 def yayin_iscisi():
     client_socket = None
@@ -186,8 +170,8 @@ def yayin_iscisi():
 
     while True:
         frame = stream_kuyrugu.get()
-        if frame is None: break
-
+        if frame is None: break 
+            
         try:
             stream_frame = cv2.resize(frame, (STREAM_WIDTH, STREAM_HEIGHT))
             encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_KALITE]
@@ -206,21 +190,23 @@ def yayin_iscisi():
     if client_socket:
         client_socket.close()
 
-
 # ─────────────────────────────────────────────
-# ANA SİSTEM (MAIN)
+# ANA SİSTEM (MAIN) 
 # ─────────────────────────────────────────────
 if __name__ == '__main__':
-    print("[BİLGİ] YOLO ve Görüntü İşleme Sistemleri Başlatılıyor...")
+    print("\n=======================================================")
+    print("[BİLGİ] Görüntü İşleme Sistemleri Başlatılıyor...")
+    print("=======================================================\n")
 
     import warnings
-
     warnings.filterwarnings("ignore")
+    
+    # 1. OCR MOTORU YÜKLENİYOR (GPU KESİNLİKLE KAPALI)
+    print("[BİLGİ] ADIM 1: OCR Motoru Yükleniyor...")
+    reader = easyocr.Reader(['en'], gpu=False)
 
-    # OCR Motoru Yükleniyor (GPU İle)
-    reader = easyocr.Reader(['en'], gpu=True)
-
-    # YOLO Motoru Yükleniyor (TensorRT)
+    # 2. YOLO MOTORU YÜKLENİYOR
+    print("[BİLGİ] ADIM 2: YOLO (TensorRT) Yükleniyor...")
     model = YOLO(YOLO_MODEL_YOLU)
 
     # İŞÇİLERİ BAŞLAT
@@ -239,7 +225,7 @@ if __name__ == '__main__':
     if not cap.isOpened():
         raise RuntimeError("Kamera açılamadı!")
 
-    print("✅ Sistem Uçuşa Hazır. Çıkmak için terminalde Ctrl+C yap.")
+    print("\n✅ Sistem Uçuşa Hazır. Çıkmak için terminalde Ctrl+C yap.\n")
 
     frame_sayac = 0
     fps_sayac = time.time()
@@ -247,15 +233,13 @@ if __name__ == '__main__':
     try:
         while True:
             ret, frame = cap.read()
-            if not ret:
+            if not ret: 
                 time.sleep(0.01)
                 continue
-
+                
             frame_sayac += 1
 
-            # GPU Trafik Polisi - YOLO Çalışırken kilitler
-            with gpu_lock:
-                results = model.track(frame, persist=True, tracker="bytetrack.yaml", verbose=False)
+            results = model.track(frame, persist=True, tracker="bytetrack.yaml", verbose=False)
 
             for r in results:
                 boxes = r.boxes
@@ -264,19 +248,17 @@ if __name__ == '__main__':
                     track_id = int(box.id[0])
                     x1, y1, x2, y2 = map(int, box.xyxy[0])
                     conf = float(box.conf[0])
-
+                    
                     if conf <= 0.5: continue
 
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
                     if track_id in plaka_hafizasi:
                         okunan_plaka = plaka_hafizasi[track_id]
-                        cv2.putText(frame, f"{okunan_plaka}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.85,
-                                    (0, 255, 0), 2)
+                        cv2.putText(frame, f"{okunan_plaka}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (0, 255, 0), 2)
                     else:
-                        cv2.putText(frame, f"Okunuyor...", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255),
-                                    2)
-
+                        cv2.putText(frame, f"Okunuyor...", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+                        
                         if not ocr_kuyrugu.full():
                             w, h = x2 - x1, y2 - y1
                             crop_x1 = max(0, x1 + int(w * 0.12))
