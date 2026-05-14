@@ -2,6 +2,7 @@ import os
 
 # Bellek parçalanmasını engelleyen koruma kalkanı
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:32"
+os.environ["OMP_NUM_THREADS"] = "1"
 
 import torch
 
@@ -9,8 +10,10 @@ import torch
 # PyTorch'un sorunlu cuDNN motorunu tamamen kapatıp standart CUDA çekirdeklerini kullanmaya zorluyoruz.
 torch.backends.cudnn.enabled = False
 torch.backends.cudnn.benchmark = False
+torch.set_num_threads(1)
 
 import cv2
+cv2.setNumThreads(0)
 from ultralytics import YOLO
 import easyocr
 import numpy as np
@@ -123,7 +126,7 @@ plaka_hafizasi = {}
 
 
 def ocr_iscisi(reader):
-    print("\n[BİLGİ] OCR İşçisi Hazır! (GPU Aktif & Trafik Polisi Devrede)")
+    print("\n[BİLGİ] OCR İşçisi Hazır! (CPU Modu & 1 Thread Lock Aktif)")
     while True:
         gorev = ocr_kuyrugu.get()
         if gorev is None: break
@@ -143,9 +146,7 @@ def ocr_iscisi(reader):
 
             gray = cv2.cvtColor(plaka_crop, cv2.COLOR_BGR2GRAY)
 
-            # GPU BOŞALANA KADAR BEKLE VE KULLAN
-            with gpu_lock:
-                ocr_res = reader.readtext(gray, allowlist='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ', width_ths=1.0)
+            ocr_res = reader.readtext(gray, allowlist='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ', width_ths=1.0)
 
             ham_metin = "".join([res[1] for res in ocr_res])
 
@@ -217,8 +218,8 @@ if __name__ == '__main__':
 
     warnings.filterwarnings("ignore")
 
-    # OCR Motoru Yükleniyor (GPU İle)
-    reader = easyocr.Reader(['en'], gpu=True)
+    # OCR Motoru Yükleniyor (CPU İle)
+    reader = easyocr.Reader(['en'], gpu=False)
 
     # YOLO Motoru Yükleniyor (TensorRT)
     model = YOLO(YOLO_MODEL_YOLU)
