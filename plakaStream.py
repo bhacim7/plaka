@@ -1,17 +1,25 @@
 import os
-# İŞTE KİLİTLENMEYİ (DEADLOCK) ÖNLEYEN HAYATİ AYARLAR BURADA
-# PyTorch'un bütün işlemciye saldırıp sistemi dondurmasını engelliyoruz
-os.environ['OMP_NUM_THREADS'] = '1'
-os.environ['OPENBLAS_NUM_THREADS'] = '1'
-os.environ['MKL_NUM_THREADS'] = '1'
+
+# 1. KORUMA: Bellek parçalanmasını engeller
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:32"
+
+# 2. HIZLANDIRMA: Jetson 4 Çekirdek Gücü Aktif
+os.environ["OMP_NUM_THREADS"] = "4"
+os.environ["OPENBLAS_NUM_THREADS"] = "4"
+os.environ["MKL_NUM_THREADS"] = "4"
 
 import torch
-# PyTorch'a KESİN OLARAK sadece 1 CPU çekirdeği kullanmasını emrediyoruz
-torch.set_num_threads(1)
+
+# 3. KORUMA: cuDNN motorunu kapatıyoruz (Kilitlenmeyi önler)
+torch.backends.cudnn.enabled = False
+torch.backends.cudnn.benchmark = False
+torch.set_num_threads(4)
 
 import cv2
+# 4. KORUMA: OpenCV Thread Kavgası Engellendi
+cv2.setNumThreads(0)
+
 from ultralytics import YOLO
-import easyocr
 import numpy as np
 import re
 from itertools import product
@@ -104,39 +112,42 @@ def duzelt_ve_dogrula(text):
     return adaylar[0][1]
 
 # ─────────────────────────────────────────────
-# 1. OCR İŞÇİSİ (1 ÇEKİRDEKLİ CPU - ASLA KİLİTLENMEZ)
+# 1. OCR İŞÇİSİ (DOĞAL GÖRÜNÜM - FİLTRESİZ)
 # ─────────────────────────────────────────────
 ocr_kuyrugu = queue.Queue(maxsize=3)
 plaka_hafizasi = {}
 
-def ocr_iscisi(reader):
-    print("\n[BİLGİ] OCR İşçisi Hazır! (CPU Modu & 1 Çekirdek Kilidi Aktif)")
+def ocr_iscisi():
+    import easyocr
+    import warnings
+    warnings.filterwarnings("ignore")
+    
+    print("\n[BİLGİ] OCR Motoru Arka Planda Yüklüyor...")
+    reader = easyocr.Reader(['en'], gpu=False)
+    print("[BİLGİ] OCR İşçisi Hazır! (4 Çekirdekli Hızlı CPU Modu Aktif)")
+    
     while True:
         gorev = ocr_kuyrugu.get()
         if gorev is None: break  
         
         track_id, plaka_crop = gorev
         try:
-            # Akıllı Boyutlandırma (Genişliği 400px'e sabitler)
-            h, w = plaka_crop.shape[:2]
-            if w > 0:
-                hedef_genislik = 400
-                oran = hedef_genislik / float(w)
-                hedef_yukseklik = int(h * oran)
-                if oran > 1:
-                    plaka_crop = cv2.resize(plaka_crop, (hedef_genislik, hedef_yukseklik), interpolation=cv2.INTER_CUBIC)
-                else:
-                    plaka_crop = cv2.resize(plaka_crop, (hedef_genislik, hedef_yukseklik), interpolation=cv2.INTER_AREA)
-
+            # SADECE 2.5 KAT BÜYÜT VE GRİYE ÇEVİR (Görüntüyü bozan filtreler silindi)
+            plaka_crop = cv2.resize(plaka_crop, None, fx=2.5, fy=2.5, interpolation=cv2.INTER_CUBIC)
             gray = cv2.cvtColor(plaka_crop, cv2.COLOR_BGR2GRAY)
             
-            # OCR İşlemi (Artık sonsuza kadar donmayacak)
+            print(f"⏳ [SİSTEM] Plaka (ID: {track_id}) okunuyor...")
+            
+            # width_ths=1.0 yapıldı (Kelimeleri normal mesafeden okur)
             ocr_res = reader.readtext(gray, allowlist='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ', width_ths=1.0)
             
             ham_metin = "".join([res[1] for res in ocr_res])
             
-            if len(ham_metin) > 3:
-                print(f"🔍 [OCR OKUDU] -> {ham_metin}")
+            print(f"🔍 [OCR HAM OKUDU] -> '{ham_metin}'")
+            
+            if len(ham_metin) < 4:
+                print(f"❌ [REDDEDİLDİ] Okunan metin çok kısa veya anlamsız.")
+                continue
 
             ham_dd = deduplicate(ham_metin)
             duzeltilmis = duzelt_ve_dogrula(ham_dd)
@@ -144,6 +155,8 @@ def ocr_iscisi(reader):
             if duzeltilmis:
                 plaka_hafizasi[track_id] = duzeltilmis
                 print(f"✅ [HEDEF KİLİTLENDİ] ID: {track_id} | Plaka: {duzeltilmis}")
+            else:
+                print(f"❌ [REDDEDİLDİ] Format Regex'e uymadı. Düzeltilen aday: '{ham_dd}'")
 
         except Exception as e:
             print(f"⚠️ [OCR İŞÇİSİ HATASI] {e}")
@@ -195,22 +208,17 @@ def yayin_iscisi():
 # ─────────────────────────────────────────────
 if __name__ == '__main__':
     print("\n=======================================================")
-    print("[BİLGİ] Görüntü İşleme Sistemleri Başlatılıyor...")
+    print("[BİLGİ] YOLO ve Görüntü İşleme Sistemleri Başlatılıyor...")
     print("=======================================================\n")
 
     import warnings
     warnings.filterwarnings("ignore")
-    
-    # 1. OCR MOTORU YÜKLENİYOR (GPU KESİNLİKLE KAPALI)
-    print("[BİLGİ] ADIM 1: OCR Motoru Yükleniyor...")
-    reader = easyocr.Reader(['en'], gpu=False)
 
-    # 2. YOLO MOTORU YÜKLENİYOR
-    print("[BİLGİ] ADIM 2: YOLO (TensorRT) Yükleniyor...")
+    print("[BİLGİ] ADIM 1: YOLO Motoru Yükleniyor...")
     model = YOLO(YOLO_MODEL_YOLU)
 
     # İŞÇİLERİ BAŞLAT
-    worker_ocr = threading.Thread(target=ocr_iscisi, args=(reader,), daemon=True)
+    worker_ocr = threading.Thread(target=ocr_iscisi, daemon=True)
     worker_ocr.start()
 
     worker_stream = threading.Thread(target=yayin_iscisi, daemon=True)
@@ -260,11 +268,11 @@ if __name__ == '__main__':
                         cv2.putText(frame, f"Okunuyor...", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
                         
                         if not ocr_kuyrugu.full():
-                            w, h = x2 - x1, y2 - y1
-                            crop_x1 = max(0, x1 + int(w * 0.12))
-                            crop_x2 = min(frame.shape[1], x2 - int(w * 0.02))
-                            crop_y1 = max(0, y1 + int(h * 0.12))
-                            crop_y2 = min(frame.shape[0], y2 - int(h * 0.12))
+                            # NEFES PAYI AZALTILDI: Araba parçaları içeri girmesin diye sadece 5 piksel bırakıyoruz
+                            crop_x1 = max(0, x1 - 5)
+                            crop_y1 = max(0, y1 - 5)
+                            crop_x2 = min(frame.shape[1], x2 + 5)
+                            crop_y2 = min(frame.shape[0], y2 + 5)
 
                             plaka_crop = frame[crop_y1:crop_y2, crop_x1:crop_x2]
                             if plaka_crop.size > 0:
