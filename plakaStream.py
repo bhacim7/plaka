@@ -259,6 +259,18 @@ if __name__ == '__main__':
                     
                     if conf <= 0.5: continue
 
+                    # Crop FIRST to avoid OCR reading the bounding box or text
+                    if track_id not in plaka_hafizasi and not ocr_kuyrugu.full():
+                        # SIFIRA SIFIR KESİM: Etraftan çöp girmesini engeller!
+                        crop_x1 = max(0, x1)
+                        crop_y1 = max(0, y1)
+                        crop_x2 = min(frame.shape[1], x2)
+                        crop_y2 = min(frame.shape[0], y2)
+
+                        plaka_crop = frame[crop_y1:crop_y2, crop_x1:crop_x2]
+                        if plaka_crop.size > 0:
+                            ocr_kuyrugu.put((track_id, plaka_crop.copy()))
+
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
                     if track_id in plaka_hafizasi:
@@ -266,17 +278,6 @@ if __name__ == '__main__':
                         cv2.putText(frame, f"{okunan_plaka}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (0, 255, 0), 2)
                     else:
                         cv2.putText(frame, f"Okunuyor...", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
-                        
-                        if not ocr_kuyrugu.full():
-                            # SIFIRA SIFIR KESİM: Etraftan çöp girmesini engeller!
-                            crop_x1 = max(0, x1)
-                            crop_y1 = max(0, y1)
-                            crop_x2 = min(frame.shape[1], x2)
-                            crop_y2 = min(frame.shape[0], y2)
-
-                            plaka_crop = frame[crop_y1:crop_y2, crop_x1:crop_x2]
-                            if plaka_crop.size > 0:
-                                ocr_kuyrugu.put((track_id, plaka_crop.copy()))
 
             if frame_sayac % 30 == 0:
                 gecen = time.time() - fps_sayac
