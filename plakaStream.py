@@ -132,14 +132,14 @@ def ocr_iscisi():
         
         track_id, plaka_crop = gorev
         try:
-            # SADECE 2.5 KAT BÜYÜT VE GRİYE ÇEVİR (Görüntüyü bozan filtreler silindi)
-            plaka_crop = cv2.resize(plaka_crop, None, fx=2.5, fy=2.5, interpolation=cv2.INTER_CUBIC)
+            # Görüntüyü bozan filtreler ve manuel resize silindi
             gray = cv2.cvtColor(plaka_crop, cv2.COLOR_BGR2GRAY)
             
             print(f"⏳ [SİSTEM] Plaka (ID: {track_id}) okunuyor...")
             
             # width_ths=1.0 yapıldı (Kelimeleri normal mesafeden okur)
-            ocr_res = reader.readtext(gray, allowlist='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ', width_ths=1.0)
+            # mag_ratio eklendi (EasyOCR kendi resize yapar), decoder='beamsearch' hallucination engeller
+            ocr_res = reader.readtext(gray, allowlist='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ', width_ths=1.0, mag_ratio=2.5, decoder='beamsearch')
             
             ham_metin = "".join([res[1] for res in ocr_res])
             
