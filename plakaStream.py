@@ -81,7 +81,6 @@ def duzelt_ve_dogrula(text):
     text_clean = deduplicate(''.join(text.upper().split()))
     text_clean = re.sub(r'[^A-Z0-9]', '', text_clean)
     
-    # Mavi TR Bandı Çöpünü Temizle
     match = re.search(r'\d', text_clean)
     if match:
         ilk_rakam_index = match.start()
@@ -112,7 +111,7 @@ def duzelt_ve_dogrula(text):
     return adaylar[0][1]
 
 # ─────────────────────────────────────────────
-# 1. OCR İŞÇİSİ (DOĞAL GÖRÜNÜM - FİLTRESİZ)
+# 1. OCR İŞÇİSİ (YAPAY TUVAL VE SİYAH BEYAZ FİLTRESİ)
 # ─────────────────────────────────────────────
 ocr_kuyrugu = queue.Queue(maxsize=3)
 plaka_hafizasi = {}
@@ -124,7 +123,7 @@ def ocr_iscisi():
     
     print("\n[BİLGİ] OCR Motoru Arka Planda Yüklüyor...")
     reader = easyocr.Reader(['en'], gpu=False)
-    print("[BİLGİ] OCR İşçisi Hazır! (4 Çekirdekli Hızlı CPU Modu Aktif)")
+    print("[BİLGİ] OCR İşçisi Hazır! (Yapay Tuval Optimizasyonu Aktif)")
     
     while True:
         gorev = ocr_kuyrugu.get()
@@ -132,31 +131,43 @@ def ocr_iscisi():
         
         track_id, plaka_crop = gorev
         try:
-            # Görüntüyü bozan filtreler ve manuel resize silindi
+            # 1. Orantılı Boyutlandırma (Yüksekliği 150 piksele sabitle)
             gray = cv2.cvtColor(plaka_crop, cv2.COLOR_BGR2GRAY)
+            h, w = gray.shape[:2]
             
-            print(f"⏳ [SİSTEM] Plaka (ID: {track_id}) okunuyor...")
-            
-            # width_ths=1.0 yapıldı (Kelimeleri normal mesafeden okur)
-            # mag_ratio eklendi (EasyOCR kendi resize yapar), decoder='beamsearch' hallucination engeller
-            ocr_res = reader.readtext(gray, allowlist='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ', width_ths=1.0, mag_ratio=2.5, decoder='beamsearch')
-            
-            ham_metin = "".join([res[1] for res in ocr_res])
-            
-            print(f"🔍 [OCR HAM OKUDU] -> '{ham_metin}'")
-            
-            if len(ham_metin) < 4:
-                print(f"❌ [REDDEDİLDİ] Okunan metin çok kısa veya anlamsız.")
-                continue
+            if h > 0 and w > 0:
+                oran = 150.0 / float(h)
+                yeni_w = int(w * oran)
+                resized = cv2.resize(gray, (yeni_w, 150), interpolation=cv2.INTER_CUBIC)
 
-            ham_dd = deduplicate(ham_metin)
-            duzeltilmis = duzelt_ve_dogrula(ham_dd)
-            
-            if duzeltilmis:
-                plaka_hafizasi[track_id] = duzeltilmis
-                print(f"✅ [HEDEF KİLİTLENDİ] ID: {track_id} | Plaka: {duzeltilmis}")
-            else:
-                print(f"❌ [REDDEDİLDİ] Format Regex'e uymadı. Düzeltilen aday: '{ham_dd}'")
+                # 2. Otsu Binarization (Gölgeleri sil, yazıyı siyah arka planı bembeyaz yap)
+                blur = cv2.GaussianBlur(resized, (5, 5), 0)
+                _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+                # 3. YAPAY BEYAZ TUVAL: Etrafına 30 piksellik bembeyaz nefes alma boşluğu ekle!
+                padded = cv2.copyMakeBorder(thresh, 30, 30, 30, 30, cv2.BORDER_CONSTANT, value=255)
+                
+                print(f"⏳ [SİSTEM] Plaka (ID: {track_id}) okunuyor...")
+                
+                # width_ths parametresi tekrar varsayılana getirildi
+                ocr_res = reader.readtext(padded, allowlist='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ')
+                
+                ham_metin = "".join([res[1] for res in ocr_res])
+                
+                print(f"🔍 [OCR HAM OKUDU] -> '{ham_metin}'")
+                
+                if len(ham_metin) < 4:
+                    print(f"❌ [REDDEDİLDİ] Okunan metin çok kısa.")
+                    continue
+
+                ham_dd = deduplicate(ham_metin)
+                duzeltilmis = duzelt_ve_dogrula(ham_dd)
+                
+                if duzeltilmis:
+                    plaka_hafizasi[track_id] = duzeltilmis
+                    print(f"✅ [HEDEF KİLİTLENDİ] ID: {track_id} | Plaka: {duzeltilmis}")
+                else:
+                    print(f"❌ [REDDEDİLDİ] Format uymadı. Ham metin: '{ham_metin}'")
 
         except Exception as e:
             print(f"⚠️ [OCR İŞÇİSİ HATASI] {e}")
@@ -268,11 +279,11 @@ if __name__ == '__main__':
                         cv2.putText(frame, f"Okunuyor...", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
                         
                         if not ocr_kuyrugu.full():
-                            # NEFES PAYI AZALTILDI: Araba parçaları içeri girmesin diye sadece 5 piksel bırakıyoruz
-                            crop_x1 = max(0, x1 - 5)
-                            crop_y1 = max(0, y1 - 5)
-                            crop_x2 = min(frame.shape[1], x2 + 5)
-                            crop_y2 = min(frame.shape[0], y2 + 5)
+                            # SIFIRA SIFIR KESİM: Etraftan çöp girmesini engeller!
+                            crop_x1 = max(0, x1)
+                            crop_y1 = max(0, y1)
+                            crop_x2 = min(frame.shape[1], x2)
+                            crop_y2 = min(frame.shape[0], y2)
 
                             plaka_crop = frame[crop_y1:crop_y2, crop_x1:crop_x2]
                             if plaka_crop.size > 0:
