@@ -131,43 +131,32 @@ def ocr_iscisi():
         
         track_id, plaka_crop = gorev
         try:
-            # 1. Orantılı Boyutlandırma (Yüksekliği 150 piksele sabitle)
-            gray = cv2.cvtColor(plaka_crop, cv2.COLOR_BGR2GRAY)
-            h, w = gray.shape[:2]
+            print(f"⏳ [SİSTEM] Plaka (ID: {track_id}) okunuyor...")
             
-            if h > 0 and w > 0:
-                oran = 150.0 / float(h)
-                yeni_w = int(w * oran)
-                resized = cv2.resize(gray, (yeni_w, 150), interpolation=cv2.INTER_CUBIC)
+            # Use native EasyOCR processing options instead of manual OpenCV ones
+            ocr_res = reader.readtext(
+                plaka_crop,
+                allowlist='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+                mag_ratio=2.5,
+                decoder='beamsearch'
+            )
 
-                # 2. Otsu Binarization (Gölgeleri sil, yazıyı siyah arka planı bembeyaz yap)
-                blur = cv2.GaussianBlur(resized, (5, 5), 0)
-                _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            ham_metin = "".join([res[1] for res in ocr_res])
 
-                # 3. YAPAY BEYAZ TUVAL: Etrafına 30 piksellik bembeyaz nefes alma boşluğu ekle!
-                padded = cv2.copyMakeBorder(thresh, 30, 30, 30, 30, cv2.BORDER_CONSTANT, value=255)
-                
-                print(f"⏳ [SİSTEM] Plaka (ID: {track_id}) okunuyor...")
-                
-                # width_ths parametresi tekrar varsayılana getirildi
-                ocr_res = reader.readtext(padded, allowlist='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ')
-                
-                ham_metin = "".join([res[1] for res in ocr_res])
-                
-                print(f"🔍 [OCR HAM OKUDU] -> '{ham_metin}'")
-                
-                if len(ham_metin) < 4:
-                    print(f"❌ [REDDEDİLDİ] Okunan metin çok kısa.")
-                    continue
+            print(f"🔍 [OCR HAM OKUDU] -> '{ham_metin}'")
 
-                ham_dd = deduplicate(ham_metin)
-                duzeltilmis = duzelt_ve_dogrula(ham_dd)
-                
-                if duzeltilmis:
-                    plaka_hafizasi[track_id] = duzeltilmis
-                    print(f"✅ [HEDEF KİLİTLENDİ] ID: {track_id} | Plaka: {duzeltilmis}")
-                else:
-                    print(f"❌ [REDDEDİLDİ] Format uymadı. Ham metin: '{ham_metin}'")
+            if len(ham_metin) < 4:
+                print(f"❌ [REDDEDİLDİ] Okunan metin çok kısa.")
+                continue
+
+            ham_dd = deduplicate(ham_metin)
+            duzeltilmis = duzelt_ve_dogrula(ham_dd)
+
+            if duzeltilmis:
+                plaka_hafizasi[track_id] = duzeltilmis
+                print(f"✅ [HEDEF KİLİTLENDİ] ID: {track_id} | Plaka: {duzeltilmis}")
+            else:
+                print(f"❌ [REDDEDİLDİ] Format uymadı. Ham metin: '{ham_metin}'")
 
         except Exception as e:
             print(f"⚠️ [OCR İŞÇİSİ HATASI] {e}")
