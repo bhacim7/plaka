@@ -133,14 +133,24 @@ def ocr_iscisi():
         try:
             print(f"⏳ [SİSTEM] Plaka (ID: {track_id}) okunuyor...")
             
-            # Use native EasyOCR processing options instead of manual OpenCV ones
+            # Non-destructive upscaling for small YOLO crops
+            h, w = plaka_crop.shape[:2]
+            target_h = 64
+            if h > 0 and h < target_h:
+                scale = target_h / h
+                new_w = int(w * scale)
+                plaka_crop = cv2.resize(plaka_crop, (new_w, target_h), interpolation=cv2.INTER_CUBIC)
+
+            # Use native EasyOCR processing options with paragraph=True to group scattered text
             ocr_res = reader.readtext(
                 plaka_crop,
                 allowlist='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ',
                 mag_ratio=2.5,
-                decoder='beamsearch'
+                decoder='beamsearch',
+                paragraph=True
             )
 
+            # With paragraph=True, ocr_res format is: [[ [box], "text" ], ...]
             ham_metin = "".join([res[1] for res in ocr_res])
 
             print(f"🔍 [OCR HAM OKUDU] -> '{ham_metin}'")
